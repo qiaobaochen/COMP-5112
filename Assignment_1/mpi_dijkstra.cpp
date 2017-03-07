@@ -20,6 +20,7 @@ using std::cout;
 using std::endl;
 using std::vector;
 
+//#define DE_BUG
 
 /*
  * utils is a namespace for utility functions
@@ -108,22 +109,47 @@ void dijkstra(int my_rank, int N, int p, MPI_Comm comm, int *mat, int *all_dist,
     int *loc_dist; //local distance
     int *loc_pred; //local predecessor
     bool *loc_visit; //local visit record array
+
+    int *displs; // Integer array (of length group size) containing the number of elements that are received from each process (significant only at root).
+    int *rcounts; //Integer array (of length group size). Entry i specifies the displacement relative to recvbuf at which to place the incoming data from process i
     //step 1: broadcast N
     if (my_rank == 0) {
         loc_N = N;
     }
     MPI_Bcast (&loc_N, 1, MPI_INT, 0, comm);
 
-
-
     //step 2: find loc_n
     loc_n = loc_N / p;
+
+    if (my_rank == p - 1) {
+        loc_n = loc_N - (p - 1) * loc_n;
+    }
+
+//#ifdef DE_BUG
+//  std::cout << "MPI process: " << my_rank << "  loc_n: " << loc_n << std::endl;
+//#endif
+
     //step 3: allocate local memory
     loc_mat = (int *) malloc(sizeof(int) * loc_N *loc_N);
     loc_dist = (int *) malloc(sizeof(int) * loc_n);
     loc_pred = (int *) malloc(sizeof(int) * loc_n);
     loc_visit = (bool *) malloc(loc_n * sizeof(bool));
 
+    displs = (int *) calloc (p, sizeof(int));
+    rcounts = (int *) calloc (p, sizeof (int));
+
+    int index = 0;
+    for (int i = 0; i < p; ++i) {
+        if (i != p -1) {
+            rcounts[i] = loc_N / p;
+            displs[i] = index;
+        } else {
+            rcounts[i] = loc_N - loc_N / p * i;
+            displs[i] = index;
+        }
+        index += rcounts[i];        
+    }
+    //std::cout << "MPI process: " << my_rank << " rcounts[0]" << rcounts[0] <<" displs[0]" <<rcounts[1] << std::endl;
     //step 4: broadcast matrix mat
     if (my_rank == 0) {
         memcpy (loc_mat, mat, loc_N * loc_N * sizeof (int));
@@ -134,7 +160,7 @@ void dijkstra(int my_rank, int N, int p, MPI_Comm comm, int *mat, int *all_dist,
     // initial loc_dist, loc_pred, loc_vist
 
     for (int loc_i = 0; loc_i < loc_n; loc_i++) {
-        int u = my_rank * loc_n + loc_i;
+        int u = my_rank * (loc_N / p) + loc_i;
         loc_dist[loc_i] = loc_mat[utils::convert_dimension_2D_1D(0, u)];
         loc_pred[loc_i] = 0;
         loc_visit[loc_i] = false;
@@ -152,26 +178,32 @@ void dijkstra(int my_rank, int N, int p, MPI_Comm comm, int *mat, int *all_dist,
         int loc_min[2], glo_min[2];
         if (loc_u == -1){
             loc_min[0] = INT_MAX;
-            loc_min[1] = my_rank * loc_n + loc_u;
+            loc_min[1] = my_rank * (loc_N / p) + loc_u;
         }
         else{
             loc_min[0] = loc_dist[loc_u];
-            loc_min[1] = my_rank * loc_n + loc_u;
+            loc_min[1] = my_rank * (loc_N / p) + loc_u;
         }
+        //if (i == 1){
+        //    std::cout << "MPI process: " << my_rank << " [0]" << loc_min[0] <<"[1]" << loc_min[1] << std::endl;
+        //}
         MPI_Allreduce(loc_min, glo_min, 1, MPI_2INT, MPI_MINLOC, comm);
         // 
 
-        int visit_pro = glo_min[1] / loc_n;
+        int visit_pro = glo_min[1] / (loc_N / p);
+        if (visit_pro == p){
+            visit_pro = p - 1;
+        }
 
         if (my_rank == visit_pro) {
-            int u = glo_min[1] % loc_n;
+            int u = glo_min[1] - visit_pro * (loc_N / p);
             loc_visit[u] = true;
         }
 
         for (int v= 0; v < loc_n; v++) {
 
             if (!loc_visit[v]) {
-                int new_dist = glo_min[0] + loc_mat[utils::convert_dimension_2D_1D(glo_min[1], my_rank * loc_n + v)];
+                int new_dist = glo_min[0] + loc_mat[utils::convert_dimension_2D_1D(glo_min[1], my_rank * (loc_N / p) + v)];
                 if (new_dist < loc_dist[v]) {
                     loc_dist[v] = new_dist;
                     loc_pred[v] = glo_min[1];
@@ -184,8 +216,8 @@ void dijkstra(int my_rank, int N, int p, MPI_Comm comm, int *mat, int *all_dist,
     //step 5: retrieve results back
     //Hint: use MPI_Gather(or MPI_Gatherv) function
     
-    MPI_Gather (loc_dist, loc_n, MPI_INT, all_dist, loc_n, MPI_INT, 0, comm);
-    MPI_Gather (loc_pred, loc_n, MPI_INT, all_pred, loc_n, MPI_INT, 0, comm);
+    MPI_Gatherv (loc_dist, loc_n, MPI_INT, all_dist, rcounts, displs, MPI_INT, 0, comm);
+    MPI_Gatherv (loc_pred, loc_n, MPI_INT, all_pred, rcounts, displs, MPI_INT, 0, comm);
 
     //step 6: remember to free memory
     free(loc_mat);
