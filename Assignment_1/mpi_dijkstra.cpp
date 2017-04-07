@@ -125,9 +125,9 @@ void dijkstra(int my_rank, int N, int p, MPI_Comm comm, int *mat, int *all_dist,
         loc_n = loc_N - (p - 1) * loc_n;
     }
 
-//#ifdef DE_BUG
-//  std::cout << "MPI process: " << my_rank << "  loc_n: " << loc_n << std::endl;
-//#endif
+    //#ifdef DE_BUG
+    //  std::cout << "MPI process: " << my_rank << "  loc_n: " << loc_n << std::endl;
+    //#endif
 
     //step 3: allocate local memory
     loc_mat = (int *) malloc(sizeof(int) * loc_N *loc_N);
